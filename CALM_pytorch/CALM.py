@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 from math import ceil
 from pathlib import Path
 from functools import partial
@@ -14,7 +16,7 @@ from torch import nn, einsum, Tensor
 
 from beartype import beartype
 from beartype.door import is_bearable
-from beartype.typing import List, Optional, Callable, Type, Tuple, Union, Literal
+from beartype.typing import Callable, Type, Literal
 
 from einops import rearrange, repeat
 
@@ -43,15 +45,15 @@ from CALM_pytorch.sampling_utils import (
 
 # types
 
-Sequence = Union[Tuple, List]
+Sequence = tuple | list
 
-HiddenPosition = Union[Literal['input'], Literal['output']]
+HiddenPosition = Literal['input', 'output']
 
 def SequenceOf(t):
-    return Union[Tuple[t, ...], List[t]]
+    return tuple[t, ...] | list[t]
 
 def SingularOrMany(t):
-    return Union[t, SequenceOf(t)]
+    return t | SequenceOf(t)
 
 # helpers
 
@@ -96,7 +98,7 @@ def freeze_all_layers_(module):
 # ex. for x-transformers TransformerWrapper
 
 @beartype
-def x_transformer_blocks(transformer: TransformerWrapper) -> List[Module]:
+def x_transformer_blocks(transformer: TransformerWrapper) -> list[Module]:
     blocks = []
     for layer in transformer.attn_layers.layers:
         blocks.append(layer[-1])
@@ -108,9 +110,9 @@ class Recorder:
     @beartype
     def __init__(
         self,
-        outputs: Optional[List] = None,
+        outputs: list | None = None,
         forward_hook_get_hidden: HiddenPosition = 'output',
-        modules: Optional[List] = None,
+        modules: list | None = None,
     ):
         self.output = default(outputs, [])
         self.modules = modules
@@ -129,7 +131,7 @@ class ExtractHiddensWrapper(Module):
     def __init__(
         self,
         model: Module,
-        blocks: List[Module],
+        blocks: list[Module],
         hidden_positions: SingularOrMany(HiddenPosition) = 'output'
     ):
         super().__init__()
@@ -171,10 +173,7 @@ class CrossAttentionBlock(Module):
         dim_context,
         linear_project_context = True,  # in the paper, they do a projection on the augmented hidden states. not sure if this is needed though, but better to be accurate first
         pre_rmsnorm = False,
-        forward_hook_get_hidden: Union[
-            Literal['output'],
-            Literal['input']
-        ] = 'output',
+        forward_hook_get_hidden: HiddenPosition = 'output',
         **kwargs
     ):
         super().__init__()
@@ -232,13 +231,13 @@ class CrossAttentionBlock(Module):
 class AugmentParams:
     model: Module
     hidden_position: SingularOrMany(HiddenPosition) = 'output'
-    transformer_blocks: Optional[List[Module]] = None
-    extract_blocks_fn: Optional[Callable[[Module], List[Module]]] = None
+    transformer_blocks: list[Module] | None = None
+    extract_blocks_fn: Callable[[Module], list[Module]] | None = None
     model_return_hiddens: bool = False
-    input_shape: Optional[Tuple[int, ...]] = None
-    connections: Optional[Tuple[Tuple[int, int], ...]] = None
+    input_shape: tuple[int, ...] | None = None
+    connections: tuple[tuple[int, int], ...] | None = None
     connect_every_num_layers: int = 4 # in the paper, they do 4
-    mask_kwarg: Optional[str] = None
+    mask_kwarg: str | None = None
 
 class CALM(Module):
     @beartype
@@ -252,8 +251,8 @@ class CALM(Module):
             pre_rmsnorm = True,
             flash = True
         ),
-        anchor_extract_blocks_fn: Callable[[Module], List[Module]] = None,
-        anchor_transformer_blocks: Optional[List[Module]] = None,
+        anchor_extract_blocks_fn: Callable[[Module], list[Module]] = None,
+        anchor_transformer_blocks: list[Module] | None = None,
         anchor_hidden_position: SingularOrMany(HiddenPosition) = 'output',
         pad_id: int = -1
     ):
@@ -265,12 +264,12 @@ class CALM(Module):
         augment_llms_params = augment_llms
 
         self.anchor_llm = anchor_llm
-        self.augment_llms = nn.ModuleList([])
+        self.augment_llms = ModuleList([])
 
         # the only parameters being learned are a bunch of cross attention layers
         # attending from anchor to augmentation model(s)
 
-        self.cross_attns = nn.ModuleList([])
+        self.cross_attns = ModuleList([])
 
         # determine the transformer blocks involved
         # derive the blocks from the model and extraction function, if not
@@ -280,6 +279,7 @@ class CALM(Module):
             anchor_transformer_blocks = get_anchor_blocks_fn(self.anchor_llm)
 
         anchor_hidden_position = cast_tuple(anchor_hidden_position, len(anchor_transformer_blocks))
+
         assert len(anchor_transformer_blocks) == len(anchor_hidden_position)
 
         # wrap each augment llm with a wrapper that extracts the hiddens
@@ -447,7 +447,7 @@ class CALM(Module):
     def forward_augments(
         self,
         prompt: Tensor,
-        prompt_mask: Optional[SingularOrMany(SequenceOf(Tensor))] = None
+        prompt_mask: SingularOrMany(SequenceOf(Tensor)) | None = None
     ):
         # if only one prompt is given with multiple augmentation llms, then just feed that one prompt into all augment llm
 
@@ -518,7 +518,7 @@ class CALM(Module):
         self,
         prompt: Tensor,
         seq_len: int,
-        prompt_mask: Optional[SingularOrMany(SequenceOf(Tensor))] = None,
+        prompt_mask: SingularOrMany(SequenceOf(Tensor)) | None = None,
         filter_fn: Callable = top_p,
         filter_kwargs: dict = dict(
             thres = 0.9
@@ -554,8 +554,8 @@ class CALM(Module):
         seq: Tensor,
         *,
         prompt: SingularOrMany(Tensor),
-        prompt_mask: Optional[SingularOrMany(Tensor)] = None,
-        mask: Optional[Tensor] = None,
+        prompt_mask: SingularOrMany(Tensor) | None = None,
+        mask: Tensor | None = None,
         return_loss = True,
         anchor_llm_in_train_mode = True  # unsure about this
     ):
@@ -622,11 +622,11 @@ class FineTuner:
         weight_decay: float,
         batch_size: int,
         dataset: Dataset,
-        data_kwarg_names: Tuple[str, ...] = ('seq', 'mask', 'prompt'),
+        data_kwarg_names: tuple[str, ...] = ('seq', 'mask', 'prompt'),
         accelerate_kwargs: dict = dict(),
         checkpoint_every: int = 1000,
         checkpoint_path: str = './checkpoints',
-        scheduler: Optional[Type[_LRScheduler]] = None,
+        scheduler: Type[_LRScheduler] | None = None,
         scheduler_kwargs: dict = dict(),
         warmup_steps: int = 1000,
         max_grad_norm = 0.5,
